@@ -19,6 +19,7 @@ from gi.repository import GLib
 
 import tempfile
 import subprocess
+import threading
 from os.path import exists
 from array import array
 import random
@@ -32,7 +33,7 @@ import logging
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
-PLUGIN_VERSION = "1.1.0"  # Bump on every user-visible change.
+PLUGIN_VERSION = "1.2.0"  # Bump on every user-visible change.
 
 
 def isSam3CheckpointPath(checkpointPath):
@@ -613,6 +614,36 @@ def configLogging(level):
     )
 
 
+def runBridgeThreaded(cmd):
+    """Run the bridge subprocess off the main thread.
+
+    The worker touches no GIMP objects (subprocess I/O only) while the main
+    thread pulses an indeterminate progress bar. The pulses double as
+    responsiveness traffic, so GIMP drops its "plug-in is not responding"
+    warning during multi-minute model runs. Returns shellRun's boolean.
+    """
+    outcome = {}
+    done = threading.Event()
+
+    def _worker():
+        try:
+            outcome["ok"] = shellRun(cmd)
+        except Exception as e:  # never leave the main thread waiting silently
+            logging.exception("Bridge worker failed: %s", e)
+            outcome["ok"] = False
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=_worker, name="segany-bridge", daemon=True)
+    thread.start()
+    Gimp.progress_init("Segment Anything: running the model (may take minutes)")
+    while not done.wait(0.2):
+        Gimp.progress_pulse()
+    thread.join()
+    Gimp.progress_end()
+    return outcome.get("ok", False)
+
+
 def run_segmentation(image, values):
     configLogging(logging.DEBUG)
     if not validateOptions(image, values):
@@ -717,7 +748,7 @@ def run_segmentation(image, values):
     procedure.run(config)
     if getattr(values, "textPrompt", ""):
         cmd.append(f"--prompt={values.textPrompt}")
-    bridgeOk = shellRun(cmd)
+    bridgeOk = runBridgeThreaded(cmd)
 
     maskFiles = glob.glob(maskFileNoExt + "*.seg")
     if not bridgeOk or not maskFiles:
@@ -767,11 +798,12 @@ class SegAnyPlugin(Gimp.PlugIn):
 
         if response == Gtk.ResponseType.OK:
             values = dialog.get_values()
+            dialog.destroy()
             image.undo_group_start()
             run_segmentation(image, values)
             image.undo_group_end()
-
-        dialog.destroy()
+        else:
+            dialog.destroy()
 
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
