@@ -108,6 +108,43 @@ def saveMasks(masks, saveFileNoExt, formatBinary):
         saveMask(filepath, arr, formatBinary)
 
 
+# Automatic mask generators hold full-resolution proposal masks on the GPU,
+# which OOMs even 20 GB cards on ~16 MP photos. Cap the working size and
+# upscale the masks back; the encoders only see ~1024 px anyway.
+DOWNSCALE_MAX_SIDE = 2048
+
+
+def _capWorkingSize(cvImage, tag):
+    """Downscale huge images so AMG fits in GPU memory.
+
+    Returns (workImage, scale); scale is 1.0 when no downscale was needed.
+    """
+    height, width = cvImage.shape[:2]
+    scale = min(1.0, DOWNSCALE_MAX_SIDE / max(height, width))
+    if scale == 1.0:
+        return cvImage, scale
+    small = cv2.resize(
+        cvImage,
+        (int(width * scale), int(height * scale)),
+        interpolation=cv2.INTER_AREA,
+    )
+    print(
+        f"{tag}: downscaled {width}x{height} to "
+        f"{small.shape[1]}x{small.shape[0]} to fit GPU memory; "
+        "masks are upscaled back to full size."
+    )
+    return small, scale
+
+
+def _upscaleMasks(masks, width, height):
+    return [
+        cv2.resize(
+            mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST
+        ).astype(bool)
+        for mask in masks
+    ]
+
+
 # --- Strategy Pattern Implementation ---
 
 
@@ -150,10 +187,8 @@ class SAM1Strategy(SegmentationStrategy):
         "sam_vit_b_01ec64": "vit_b",
     }
 
-    # SAM1 holds full-resolution proposal masks on the GPU, which OOMs even
-    # on 20 GB cards for ~16 MP photos. Cap the working size and upscale the
-    # masks back; the encoder itself only sees 1024 px anyway.
-    MAX_SIDE = 2048
+    # See DOWNSCALE_MAX_SIDE: the working image is capped and masks are
+    # upscaled back (the encoder itself only sees 1024 px anyway).
 
     def load_model(self, checkPtFilePath, modelType):
         if not SAM1_AVAILABLE:
@@ -172,19 +207,7 @@ class SAM1Strategy(SegmentationStrategy):
 
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
         height, width = cvImage.shape[:2]
-        scale = min(1.0, self.MAX_SIDE / max(height, width))
-        workImage = cvImage
-        if scale < 1.0:
-            workImage = cv2.resize(
-                cvImage,
-                (int(width * scale), int(height * scale)),
-                interpolation=cv2.INTER_AREA,
-            )
-            print(
-                f"SAM1: downscaled {width}x{height} to "
-                f"{workImage.shape[1]}x{workImage.shape[0]} to fit GPU memory; "
-                "masks are upscaled back to full size."
-            )
+        workImage, scale = _capWorkingSize(cvImage, "SAM1")
         try:
             mask_generator = SamAutomaticMaskGenerator_SAM1(sam)
             masks = mask_generator.generate(workImage)
@@ -196,14 +219,7 @@ class SAM1Strategy(SegmentationStrategy):
             return
         segs = [mask["segmentation"] for mask in masks]
         if scale < 1.0:
-            segs = [
-                cv2.resize(
-                    mask.astype(np.uint8),
-                    (width, height),
-                    interpolation=cv2.INTER_NEAREST,
-                ).astype(bool)
-                for mask in segs
-            ]
+            segs = _upscaleMasks(segs, width, height)
         if not segs:
             print("SAM1 found no masks.")
             return
@@ -435,20 +451,35 @@ class SAM2Strategy(SegmentationStrategy):
             return None
 
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
+        height, width = cvImage.shape[:2]
+        workImage, scale = _capWorkingSize(cvImage, "SAM2")
         points_per_side = 32
         if kwargs.get("segRes") == "Low":
             points_per_side = 16
         elif kwargs.get("segRes") == "High":
             points_per_side = 64
-        mask_generator = SAM2AutomaticMaskGenerator(
-            model=sam,
-            points_per_side=points_per_side,
-            crop_n_layers=kwargs.get("cropNLayers", 0),
-            min_mask_region_area=kwargs.get("minMaskArea", 0),
-        )
-        masks = mask_generator.generate(cvImage)
-        masks = [mask["segmentation"] for mask in masks]
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        try:
+            mask_generator = SAM2AutomaticMaskGenerator(
+                model=sam,
+                points_per_side=points_per_side,
+                crop_n_layers=kwargs.get("cropNLayers", 0),
+                min_mask_region_area=kwargs.get("minMaskArea", 0),
+            )
+            masks = mask_generator.generate(workImage)
+        except torch.cuda.OutOfMemoryError:
+            print(
+                "Error: SAM2 ran out of GPU memory on this image. "
+                "Try a smaller image or a lower Segmentation Resolution."
+            )
+            return
+        segs = [mask["segmentation"] for mask in masks]
+        if scale < 1.0:
+            segs = _upscaleMasks(segs, width, height)
+        if not segs:
+            print("SAM2 found no masks.")
+            return
+        saveMasks(segs, saveFileNoExt, formatBinary)
+        print(f"SAM2 wrote {len(segs)} mask(s)")
 
     def segment_box(
         self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, **kwargs

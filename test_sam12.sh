@@ -203,6 +203,17 @@ else
 fi
 check_masks vit_h_auto_full "$WORK/vitfull_" "$IMGFULL"
 
+# 11. SAM2 Auto High on the full-size photo (the reported X-crash config:
+# High density + min area 100 at 16 MP OOMed before the downscale cap).
+rm -f "$WORK/s21hires_"*.seg
+run_step sam21_hires "SAM2 wrote" -- auto "$S21_PT" "$IMGFULL" Auto Multiple "$WORK/s21hires_" True High 0 100
+if grep -q "downscaled" "$WORK/sam21_hires.log"; then
+    pass "sam21_hires used the downscale path"
+else
+    fail "sam21_hires did not print the downscale notice"
+fi
+check_masks sam21_hires "$WORK/s21hires_" "$IMGFULL"
+
 log ""
 log "======================================"
 log "passed: $PASSED   failed: $FAILED"
