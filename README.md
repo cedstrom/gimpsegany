@@ -36,6 +36,15 @@ After extracting, ensure the plugin script is executable (on Linux and macOS).
 
 You need to install the backend for the Segment Anything model you want to use. The plugin can use SAM3 (SAM 3 / SAM 3.1), SAM2 (SAM 2 / SAM 2.1) and SAM1.
 
+Quick start (agents: see `AGENTS.md`):
+
+```bash
+./setup.sh --with-models --install-plugin   # venv + deps + checkpoints + GIMP install
+```
+
+`./setup.sh --help` lists every option (`--venv`, `--models-dir`, `--plugindir`,
+`--dry-run`); `TORCH_INDEX_URL` selects the torch wheel index for ROCm systems.
+
 #### Segment Anything 3 (SAM3 / SAM 3.1) Installation
 
 The plugin runs SAM 3 and SAM 3.1 through the [Transformers](https://huggingface.co/docs/transformers/main/en/model_doc/sam3) port of the model, so any `Sam3Model` checkpoint folder works. The ungated mirror [unsloth/sam3.1](https://huggingface.co/unsloth/sam3.1) is the easiest to use: it needs no access request, and its BF16 weights run on NVIDIA and on AMD GPUs (ROCm).
