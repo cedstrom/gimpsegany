@@ -33,6 +33,31 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 
+def isSam3CheckpointPath(checkpointPath):
+    """True if the path, or the folder holding it, is a transformers SAM3 model."""
+    if not checkpointPath:
+        return False
+    if os.path.basename(checkpointPath).lower().startswith("sam3"):
+        return True
+    modelDir = (
+        checkpointPath
+        if os.path.isdir(checkpointPath)
+        else os.path.dirname(os.path.abspath(checkpointPath))
+    )
+    configFile = os.path.join(modelDir, "config.json")
+    if not os.path.isfile(configFile):
+        return False
+    try:
+        with open(configFile, "r") as f:
+            config = json.load(f)
+    except Exception:
+        return False
+    description = str(config.get("model_type", "")) + str(
+        config.get("architectures", "")
+    )
+    return "sam3" in description.lower()
+
+
 class DialogValue:
     def __init__(self, filepath):
         data = None
@@ -48,6 +73,7 @@ class DialogValue:
         self.segRes = "Medium"
         self.cropNLayers = 0
         self.minMaskArea = 0
+        self.textPrompt = ""
 
         try:
             with open(filepath, "r") as f:
@@ -63,6 +89,7 @@ class DialogValue:
                 self.segRes = data.get("segRes", self.segRes)
                 self.cropNLayers = data.get("cropNLayers", self.cropNLayers)
                 self.minMaskArea = data.get("minMaskArea", self.minMaskArea)
+                self.textPrompt = data.get("textPrompt", self.textPrompt)
         except Exception as e:
             logging.info("Error reading json : %s" % e)
 
@@ -79,6 +106,7 @@ class DialogValue:
             "segRes": self.segRes,
             "cropNLayers": self.cropNLayers,
             "minMaskArea": self.minMaskArea,
+            "textPrompt": self.textPrompt,
         }
         with open(filepath, "w") as f:
             json.dump(data, f)
@@ -130,6 +158,8 @@ class OptionsDialog(Gtk.Dialog):
             "sam2_hiera_base_plus (SAM2)",
             "sam2_hiera_small (SAM2)",
             "sam2_hiera_tiny (SAM2)",
+            "sam3.1 (SAM3)",
+            "sam3 (SAM3)",
         ]
         for value in self.modelTypeVals:
             self.modelTypeDropDown.append_text(value)
@@ -145,7 +175,7 @@ class OptionsDialog(Gtk.Dialog):
 
         # Checkpoint Path
         checkPtFileLbl = Gtk.Label(
-            label="Model Checkpoint (.pth/.safetensors):", xalign=1
+            label="Model Checkpoint (.pth/.safetensors, SAM3 folder):", xalign=1
         )
         self.checkPtFileBtn = Gtk.FileChooserButton(
             title="Select Model Checkpoint Path"
@@ -204,6 +234,17 @@ class OptionsDialog(Gtk.Dialog):
         grid.attach(self.minMaskAreaLbl, 0, 8, 1, 1)
         grid.attach(self.minMaskAreaEntry, 1, 8, 1, 1)
 
+        # Text Prompt (SAM3)
+        self.textPromptLbl = Gtk.Label(label="Text Prompt (SAM3):", xalign=1)
+        self.textPromptEntry = Gtk.Entry()
+        self.textPromptEntry.set_text(self.values.textPrompt)
+        self.textPromptEntry.set_tooltip_text(
+            "Comma separated noun phrases for SAM 3, e.g. 'person, chair'. "
+            "Optional for Box and Selection segmentation."
+        )
+        grid.attach(self.textPromptLbl, 0, 11, 1, 1)
+        grid.attach(self.textPromptEntry, 1, 11, 1, 1)
+
         # Mask Color
         if not self.isGrayScale:
             self.randColBtn = Gtk.CheckButton(label="Random Mask Color")
@@ -235,7 +276,7 @@ class OptionsDialog(Gtk.Dialog):
 
         isAuto = segType == "Auto"
 
-        # Determine if SAM1 is being used
+        # Determine the model family from the Model Type combo / checkpoint path
         checkpoint_path = self.checkPtFileBtn.get_filename()
         isSam1_by_filename = (
             modelType == "Auto"
@@ -244,20 +285,28 @@ class OptionsDialog(Gtk.Dialog):
         )
         isSam1_by_type = "(SAM1)" in modelType
         isSam1 = isSam1_by_filename or isSam1_by_type
+        isSam3 = "(SAM3)" in modelType or (
+            modelType == "Auto" and isSam3CheckpointPath(checkpoint_path)
+        )
 
         self.selPtsLbl.set_visible(segType in ["Selection"])
         self.selPtsEntry.set_visible(segType in ["Selection"])
         self.maskTypeLbl.set_visible(segType not in ["Auto"])
         self.maskTypeDropDown.set_visible(segType not in ["Auto"])
+        self.textPromptLbl.set_visible(isSam3)
+        self.textPromptEntry.set_visible(isSam3)
 
-        # Show SAM2-specific options only for Auto mode and not SAM1
-        show_sam2_options = isAuto and not isSam1
+        # Minimum Mask Area is honoured by SAM2 and SAM3 Auto segmentation
+        show_mask_area = isAuto and not isSam1
+        self.minMaskAreaLbl.set_visible(show_mask_area)
+        self.minMaskAreaEntry.set_visible(show_mask_area)
+
+        # Segmentation Resolution / Crop n Layers are SAM2 only
+        show_sam2_options = isAuto and not isSam1 and not isSam3
         self.segResLbl.set_visible(show_sam2_options)
         self.segResDropDown.set_visible(show_sam2_options)
         self.cropNLayersLbl.set_visible(show_sam2_options)
         self.cropNLayersChk.set_visible(show_sam2_options)
-        self.minMaskAreaLbl.set_visible(show_sam2_options)
-        self.minMaskAreaEntry.set_visible(show_sam2_options)
 
     def on_random_toggled(self, widget):
         is_random = self.randColBtn.get_active()
@@ -276,6 +325,7 @@ class OptionsDialog(Gtk.Dialog):
         self.values.modelType = self.modelTypeVals[self.modelTypeDropDown.get_active()]
 
         self.values.checkPtPath = self.checkPtFileBtn.get_filename()
+        self.values.textPrompt = self.textPromptEntry.get_text().strip()
         self.values.segType = self.segTypeVals[self.segTypeDropDown.get_active()]
         self.values.maskType = self.maskTypeVals[self.maskTypeDropDown.get_active()]
         if hasattr(self, "randColBtn"):
@@ -667,6 +717,8 @@ def run_segmentation(image, values):
     config = procedure.create_config()
     config.set_property("image", image)
     procedure.run(config)
+    if getattr(values, "textPrompt", ""):
+        cmd.append(f"--prompt={values.textPrompt}")
     shellRun(cmd)
 
     layerMaskColor = None if values.isRandomColor else values.maskColor

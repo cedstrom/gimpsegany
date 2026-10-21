@@ -12,7 +12,7 @@ Download the zip file and follow the installation instructions below.
 
 This GIMP plugin integrates with Meta's AI-based tool Segment Anything, which enables you to effortlessly isolate objects within raster images directly from GIMP.
 
-This project provides a plugin that supports both **Segment Anything 1 (SAM1)** and **Segment Anything 2 (SAM2)**.
+This project provides a plugin that supports **Segment Anything 3 (SAM3)**, **Segment Anything 2 (SAM2)** and **Segment Anything 1 (SAM1)**.
 
 ---
 
@@ -34,7 +34,37 @@ After extracting, ensure the plugin script is executable (on Linux and macOS).
 
 ### Segment Anything Backend Installation
 
-You need to install the backend for the Segment Anything model you want to use. The plugin can use either SAM1 or SAM2.
+You need to install the backend for the Segment Anything model you want to use. The plugin can use SAM3 (SAM 3 / SAM 3.1), SAM2 (SAM 2 / SAM 2.1) and SAM1.
+
+#### Segment Anything 3 (SAM3 / SAM 3.1) Installation
+
+The plugin runs SAM 3 and SAM 3.1 through the [Transformers](https://huggingface.co/docs/transformers/main/en/model_doc/sam3) port of the model, so any `Sam3Model` checkpoint folder works. The ungated mirror [unsloth/sam3.1](https://huggingface.co/unsloth/sam3.1) is the easiest to use: it needs no access request, and its BF16 weights run on NVIDIA and on AMD GPUs (ROCm).
+
+**Prerequisites:**
+
+- Python 3.10 or higher (3.12+ recommended)
+- PyTorch 2.7 or higher with a CUDA or ROCm build
+
+**Installation Steps:**
+
+1. Install the model library into the Python environment the plugin will run:
+   ```bash
+   pip install "transformers>=5.10" pillow opencv-python-headless
+   ```
+2. Download the checkpoint (about 1.7 GB):
+   ```bash
+   hf download unsloth/sam3.1 --local-dir /path/to/sam3.1
+   ```
+   Keep `config.json`, `model.safetensors` and the tokenizer files in the same folder.
+3. In the plugin dialog pick `sam3.1 (SAM3)` as **Model Type** and select `model.safetensors` (or any file of that folder) as **Checkpoint Path**. The model is loaded from that folder; the model type only selects the SAM3 code path.
+
+**AMD / ROCm:** install a ROCm PyTorch build into the same environment, for example:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.1
+```
+
+The FP8 and INT8 files of `unsloth/sam3.1` require quantization kernels that are not available on ROCm, so use the BF16 `model.safetensors`.
 
 #### Segment Anything 2 (SAM2) Installation
 
@@ -79,6 +109,18 @@ You will get the detailed installation instructions about installing Segment Any
 
 Perform a quick check to ensure your Segment Anything installation is working properly. Open a console and change directory to your GIMP plugin folder.
 
+**For a SAM3 model (SAM 3 / SAM 3.1):**
+
+```
+/path/to/python3/python ./seganybridge.py sam3.1 /path/to/sam3.1/model.safetensors
+```
+
+A scripted end-to-end check of the SAM3 path (test mode, Auto, Box and Selection, plus the geometry of every mask written) is in `test_sam3.sh`:
+
+```
+./test_sam3.sh [image] [path/to/python3/python] [path/to/sam3.1]
+```
+
 **For SAM2 model:**
 
 ```
@@ -90,8 +132,6 @@ Perform a quick check to ensure your Segment Anything installation is working pr
 ```
 /path/to/python3/python ./seganybridge.py vit_h /path/to/checkpoint/model/sam_vit_h_4b8939.pth
 ```
-
-A "Success!!" message indicates a successful installation.
 
 ---
 
@@ -107,7 +147,7 @@ A "Success!!" message indicates a successful installation.
 ### Options
 
 - **Python3 Path:** The path to the python3 instance used while running the seganybridge script.
-- **Model Type:** The type of the Segment Anything model to use. Can be set to `Auto` to infer from the checkpoint filename (`sam_` prefix for SAM1, `sam2` for SAM2).
+- **Model Type:** The type of the Segment Anything model to use. Can be set to `Auto` to infer it from the checkpoint: `sam_` prefix for SAM1, `sam2` prefix for SAM2, a file inside a folder with a SAM3 `config.json` for SAM3.
 - **Checkpoint Path:** The path to the downloaded Segment Anything model checkpoint file (`.pth` or `.safetensors`).
 - **Segmentation Type:** The method to be used for segmentation.
   - **Auto:** Automatically segments the entire image.
@@ -116,7 +156,18 @@ A "Success!!" message indicates a successful installation.
 - **Mask Type:**
   - **Multiple:** Creates a separate layer for each potential object.
   - **Single:** Creates a single layer with the mask that has the highest AI probability.
+- **Text Prompt (SAM3):** One or more comma separated noun phrases (`sofa, lamp`) used to prompt a SAM 3 model. Visible only for SAM3 models.
 - **Random Mask Color:** If checked, the generated layers will have random colors. Otherwise, a specific color can be chosen.
+
+#### SAM3 Specific Options
+
+These options apply when a SAM 3 / SAM 3.1 model is used.
+
+- **Text Prompt:** SAM 3 is a promptable concept detector: it segments every instance of the concept you name. Enter one or more short noun phrases separated by commas, for example `person, red car`. The prompt is required for "Auto" segmentation and optional for "Box" and "Selection", where it refines what the visual prompt selects.
+- **Minimum Mask Area:** works the same way as for SAM2.
+- **Selection:** the Transformers port of SAM 3 takes box prompts, not point prompts, so the bounding box of your GIMP selection is used as the visual prompt.
+- **Segmentation Resolution** and **Crop n Layers** are SAM2 only and are hidden for SAM3.
+
 
 #### SAM2 Specific Options (for "Auto" Segmentation)
 
