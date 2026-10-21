@@ -33,7 +33,7 @@ import logging
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
-PLUGIN_VERSION = "1.3.0"  # Bump on every user-visible change.
+PLUGIN_VERSION = "1.3.1"  # Bump on every user-visible change.
 
 
 def isSam3CheckpointPath(checkpointPath):
@@ -759,9 +759,8 @@ def run_segmentation(image, values):
     if not bridgeOk or not maskFiles:
         showError(
             "Segment Anything produced no masks.\n\n"
-            "Check the GIMP console for the bridge output, confirm the dialog "
-            f"shows v{PLUGIN_VERSION} (bottom right), and confirm the Python3 "
-            "Path environment holds the backend you need."
+            "Check the GIMP console for the bridge output, and confirm the "
+            "Python3 Path environment holds the backend you need."
         )
     else:
         layerMaskColor = None if values.isRandomColor else values.maskColor
