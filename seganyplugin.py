@@ -32,6 +32,8 @@ import logging
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+PLUGIN_VERSION = "1.1.0"  # Bump on every user-visible change.
+
 
 def isSam3CheckpointPath(checkpointPath):
     """True if the path, or the folder holding it, is a transformers SAM3 model."""
@@ -230,6 +232,11 @@ class OptionsDialog(Gtk.Dialog):
         )
         grid.attach(self.textPromptLbl, 0, 10, 1, 1)
         grid.attach(self.textPromptEntry, 1, 10, 1, 1)
+
+        # Version stamp (bottom right) so a glance confirms the installed build.
+        self.versionLbl = Gtk.Label(xalign=1)
+        self.versionLbl.set_markup(f"<small>v{PLUGIN_VERSION}</small>")
+        grid.attach(self.versionLbl, 0, 11, 2, 1)
 
         # Mask Color
         if not self.isGrayScale:
@@ -710,10 +717,19 @@ def run_segmentation(image, values):
     procedure.run(config)
     if getattr(values, "textPrompt", ""):
         cmd.append(f"--prompt={values.textPrompt}")
-    shellRun(cmd)
+    bridgeOk = shellRun(cmd)
 
-    layerMaskColor = None if values.isRandomColor else values.maskColor
-    createLayers(image, maskFileNoExt, layerMaskColor, formatBinary, values)
+    maskFiles = glob.glob(maskFileNoExt + "*.seg")
+    if not bridgeOk or not maskFiles:
+        showError(
+            "Segment Anything produced no masks.\n\n"
+            "Check the GIMP console for the bridge output, confirm the dialog "
+            f"shows v{PLUGIN_VERSION} (bottom right), and confirm the Python3 "
+            "Path environment holds the backend you need."
+        )
+    else:
+        layerMaskColor = None if values.isRandomColor else values.maskColor
+        createLayers(image, maskFileNoExt, layerMaskColor, formatBinary, values)
     cleanup(filepathPrefix)
 
     if channel is not None:
