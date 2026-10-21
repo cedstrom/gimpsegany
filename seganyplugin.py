@@ -33,7 +33,7 @@ import logging
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
-PLUGIN_VERSION = "1.2.0"  # Bump on every user-visible change.
+PLUGIN_VERSION = "1.3.0"  # Bump on every user-visible change.
 
 
 def isSam3CheckpointPath(checkpointPath):
@@ -166,6 +166,11 @@ class OptionsDialog(Gtk.Dialog):
         )
         self.checkPtFileBtn = Gtk.FileChooserButton(
             title="Select Model Checkpoint Path"
+        )
+        self.checkPtFileBtn.set_tooltip_text(
+            "The backend is detected automatically. For large photos SAM3 "
+            "runs at full resolution; SAM1/SAM2 Auto downscale images over "
+            "2048 px to fit GPU memory."
         )
         if self.values.checkPtPath is not None:
             self.checkPtFileBtn.set_filename(self.values.checkPtPath)

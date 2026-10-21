@@ -193,6 +193,29 @@ These options are only available when using a SAM2 model with "Auto" segmentatio
 - **Segmentation Resolution:** Controls the density of the segmentation grid. Higher values will generate more masks but will be slower. (Options: Low, Medium, High)
 - **Crop n Layers:** Enables segmentation on smaller, overlapping crops of the image, which can improve accuracy for smaller objects.
 - **Minimum Mask Area:** Discards small, irrelevant masks.
+- Like SAM1, **Auto** downscales images whose longest side exceeds 2048 px
+  to fit GPU memory (High density on a 16 MP photo otherwise exhausts a
+  20 GB card) and upscales the masks back to full size.
+
+### Which backend for large photos
+
+Auto memory usage does **not** improve much from SAM1 to SAM2 — both build
+dense full-resolution proposals, and both exhaust a 20 GB card on a 16 MP
+photo (SAM1: 14.5 GB held + 11.5 GB attempted; SAM2 Medium: 13 GB + 6.7 GB).
+SAM2 is somewhat leaner and faster at the same working size, and High
+density quadruples its proposals. SAM3 is the step-change: no proposal
+grid, so a 16 MP photo segments at full resolution with no downscaling.
+
+| Backend (Auto) | 16 MP full-res | At 2048 px cap |
+|---|---|---|
+| SAM1 | OOM | 74 masks, ~5 s, 7.7 GB peak |
+| SAM2 Medium, min area 100 | OOM | 42 masks, ~3 s, 5.1 GB peak |
+| SAM2 High, min area 100 | OOM | 62 masks, ~7 s, 5.3 GB peak |
+| SAM3 (`person`) | 5 masks, full resolution, no downscale | n/a |
+
+Measured on a 20 GB AMD card (ROCm); SAM3 in BF16, SAM1/SAM2 in FP32.
+Rule of thumb: SAM3 for big photos when a text prompt fits the task;
+SAM1/SAM2 Auto is capped at 2048 px regardless.
 
 ### Workflow
 
