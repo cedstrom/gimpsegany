@@ -112,9 +112,6 @@ def saveMasks(masks, saveFileNoExt, formatBinary):
 
 
 class SegmentationStrategy:
-    def get_model_type_from_filename(self, model_filename):
-        raise NotImplementedError
-
     def load_model(self, checkPtFilePath, modelType):
         raise NotImplementedError
 
@@ -152,21 +149,6 @@ class SAM1Strategy(SegmentationStrategy):
         "sam_vit_l_0b3195": "vit_l",
         "sam_vit_b_01ec64": "vit_b",
     }
-
-    def get_model_type_from_filename(self, model_filename):
-        filename_stem = os.path.splitext(model_filename)[0]
-        model_type = self.MODEL_TYPE_LOOKUP.get(filename_stem)
-        if model_type:
-            print(f"Auto-detected SAM1 model type: {model_type}")
-            return model_type
-        else:
-            print(
-                f"Error: Could not auto-detect model type from SAM1 filename: {model_filename}"
-            )
-            print(
-                f"Please use one of the following file names: {list(self.MODEL_TYPE_LOOKUP.keys())}"
-            )
-            return None
 
     def load_model(self, checkPtFilePath, modelType):
         if not SAM1_AVAILABLE:
@@ -343,22 +325,14 @@ class SAM2Strategy(SegmentationStrategy):
     def __init__(self):
         self._temp_pth_path = None
 
-    def get_model_type_from_filename(self, model_filename):
-        filename_stem = os.path.splitext(model_filename)[0]
-        model_type = self.MODEL_TYPE_LOOKUP.get(filename_stem)
-        if model_type:
-            print(f"Auto-detected SAM2 model type: {model_type}")
-            return model_type
-        else:
-            print(
-                f"Error: Could not auto-detect model type from SAM2 filename: {model_filename}"
-            )
-            print(
-                f"Please use one of the following file names (or their .safetensors/.pt equivalents): {list(self.MODEL_TYPE_LOOKUP.keys())}"
-            )
-            return None
-
     def _convert_safetensors_to_pth(self, safetensors_path, pth_path):
+        try:
+            if os.path.exists(pth_path) and os.path.getmtime(
+                pth_path
+            ) >= os.path.getmtime(safetensors_path):
+                return True
+        except OSError:
+            pass
         try:
             from safetensors.torch import load_file
 
@@ -389,28 +363,6 @@ class SAM2Strategy(SegmentationStrategy):
         }
         actual_checkpoint_path = checkPtFilePath
         if checkPtFilePath.endswith(".safetensors"):
-            siblingConfig = os.path.join(
-                os.path.dirname(os.path.abspath(checkPtFilePath)), "config.json"
-            )
-            try:
-                with open(siblingConfig) as f:
-                    sibling = json.load(f)
-                description = str(sibling.get("model_type", "")) + str(
-                    sibling.get("architectures", "")
-                )
-                if "sam2" in description.lower() and "sam3" not in description.lower():
-                    print(
-                        "Error: this .safetensors is a transformers-native SAM2 "
-                        "checkpoint (e.g. facebook/sam2.1-hiera-large), which the "
-                        "sam2 package cannot load."
-                    )
-                    print(
-                        "Use the Meta-layout .pt file instead "
-                        "(sam2.1_hiera_large.pt in the same folder)."
-                    )
-                    return None
-            except Exception:
-                pass
             print("Converting safetensors to pth format...")
             self._temp_pth_path = checkPtFilePath.replace(".safetensors", "_temp.pth")
             if self._convert_safetensors_to_pth(checkPtFilePath, self._temp_pth_path):
@@ -572,10 +524,6 @@ class SAM3Strategy(SegmentationStrategy):
     DEFAULT_PROMPT = "object"
     CONFIDENCE_THRESHOLD = 0.5
     MASK_THRESHOLD = 0.5
-
-    def get_model_type_from_filename(self, model_filename):
-        print("Auto-detected SAM3 model type: sam3")
-        return "sam3"
 
     def _resolveSource(self, checkPtFilePath):
         """Map the picked checkpoint onto something from_pretrained accepts."""
@@ -799,6 +747,160 @@ class SAM3Strategy(SegmentationStrategy):
         self._predict(sam, cvImage, textPrompt=self.DEFAULT_PROMPT)
 
 
+SAM1_SIZE_ORDER = ("vit_h", "vit_l", "vit_b")
+SAM2_SIZE_ORDER = ("large", "base_plus", "small", "tiny")
+SAM3_TYPE_NAME = "sam3"
+
+
+def _parseFilenameStem(stem):
+    """(family, version, exactType) from a checkpoint filename stem.
+
+    version is '2.1' / '2.0' / None; exactType is a model type name or None
+    when the name carries no size.
+    """
+    stem = stem.lower()
+    if stem in SAM2Strategy.MODEL_TYPE_LOOKUP:
+        version = "2.1" if stem.startswith("sam2.1_") else "2.0"
+        return ("sam2", version, stem)
+    for prefix in ("sam2.1_hiera_", "sam2_hiera_"):
+        if stem.startswith(prefix):
+            version = "2.1" if prefix.startswith("sam2.1_") else "2.0"
+            return ("sam2", version, None)
+    if stem in SAM1Strategy.MODEL_TYPE_LOOKUP:
+        return ("sam1", None, SAM1Strategy.MODEL_TYPE_LOOKUP[stem])
+    if stem.startswith("sam_"):
+        return ("sam1", None, None)
+    return (None, None, None)
+
+
+def _isTransformersNativeSam2(checkPtFilePath):
+    """True if a .safetensors sits beside a transformers SAM2 config.
+
+    Such files (e.g. facebook/sam2.1-hiera-large/model.safetensors) use
+    HF-native key names that the sam2 package cannot load.
+    """
+    if not checkPtFilePath.endswith(".safetensors"):
+        return False
+    try:
+        with open(
+            os.path.join(
+                os.path.dirname(os.path.abspath(checkPtFilePath)), "config.json"
+            )
+        ) as f:
+            sibling = json.load(f)
+    except Exception:
+        return False
+    description = str(sibling.get("model_type", "")) + str(
+        sibling.get("architectures", "")
+    )
+    return "sam2" in description.lower() and "sam3" not in description.lower()
+
+
+def loadWithFallback(checkPtFilePath, modelType):
+    """Load a checkpoint without needing the right model type up front.
+
+    Candidates are tried in evidence order: the explicit request, the
+    filename, the weights themselves, then the blind tail (3, 2.1 sizes,
+    2.0 sizes, 1 sizes). The first load that succeeds wins. Returns
+    (strategy, handle, typeName); handle is None when nothing loaded.
+    """
+    model_filename = os.path.basename(checkPtFilePath)
+    stem = os.path.splitext(model_filename)[0]
+    requested = (modelType or "").lower()
+
+    isSam3Evidence = requested.startswith("sam3") or (
+        os.path.exists(checkPtFilePath)
+        and (
+            model_filename.lower().startswith("sam3")
+            or isSam3ModelPath(checkPtFilePath)
+        )
+    )
+    if not os.path.exists(checkPtFilePath) and not isSam3Evidence:
+        print(f"Error: Checkpoint file not found: {checkPtFilePath}")
+        return None, None, modelType
+
+    if os.path.isfile(checkPtFilePath) and _isTransformersNativeSam2(checkPtFilePath):
+        print(
+            "Error: this .safetensors is a transformers-native SAM2 checkpoint "
+            "(e.g. facebook/sam2.1-hiera-large), which the sam2 package cannot load."
+        )
+        print("Use the Meta-layout .pt file instead.")
+        return None, None, modelType
+
+    candidates = []
+
+    def add(family, typeName):
+        candidate = (family, typeName)
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    # 1. The explicit request, if it names a real type.
+    if requested.startswith("sam3"):
+        add("sam3", SAM3_TYPE_NAME)
+    elif requested in {v.lower() for v in SAM1Strategy.MODEL_TYPE_LOOKUP.values()}:
+        add("sam1", requested)
+    elif requested in {k.lower() for k in SAM2Strategy.MODEL_TYPE_LOOKUP}:
+        add("sam2", requested)
+
+    # 2. Filename evidence.
+    fileFamily, fileVersion, fileType = _parseFilenameStem(stem)
+    if fileType:
+        add(fileFamily, fileType)
+
+    # 3. Content evidence.
+    contentFamily = (
+        detectFamily(checkPtFilePath) if os.path.isfile(checkPtFilePath) else None
+    )
+    if contentFamily == "sam3":
+        add("sam3", SAM3_TYPE_NAME)
+    elif contentFamily == "sam1":
+        size = detectVitSize(checkPtFilePath)
+        if size:
+            print(f"Auto-detected SAM1 model type from weights: {size}")
+            add("sam1", size)
+        else:
+            for size in SAM1_SIZE_ORDER:
+                add("sam1", size)
+    elif contentFamily == "sam2":
+        print("Checkpoint holds SAM2 weights; using the SAM2 backend.")
+        version = detectSam2MinorVersion(checkPtFilePath)
+        versions = [version] if version else ["2.1", "2.0"]
+        for ver in versions:
+            prefix = "sam2.1_hiera_" if ver == "2.1" else "sam2_hiera_"
+            for size in SAM2_SIZE_ORDER:
+                add("sam2", prefix + size)
+
+    # 4. Blind tail: 3 (when applicable), then 2.1 sizes, 2.0 sizes, 1 sizes.
+    if isSam3Evidence:
+        add("sam3", SAM3_TYPE_NAME)
+    for ver in ("2.1", "2.0"):
+        prefix = "sam2.1_hiera_" if ver == "2.1" else "sam2_hiera_"
+        for size in SAM2_SIZE_ORDER:
+            add("sam2", prefix + size)
+    for size in SAM1_SIZE_ORDER:
+        add("sam1", size)
+
+    makers = {"sam1": SAM1Strategy, "sam2": SAM2Strategy, "sam3": SAM3Strategy}
+    attempted = []
+    for family, typeName in candidates:
+        print(f"Trying {typeName} ...")
+        strategy = makers[family]()
+        try:
+            handle = strategy.load_model(checkPtFilePath, typeName)
+        except Exception as e:
+            print(f"{typeName} failed: {str(e).splitlines()[0] if str(e) else '?'}")
+            handle = None
+        if handle is not None:
+            print(f"Loaded with {typeName}.")
+            return strategy, handle, typeName
+        strategy.cleanup()
+        attempted.append(typeName)
+    print(
+        f"Error: could not load {checkPtFilePath} (tried: {', '.join(attempted)})"
+    )
+    return None, None, modelType
+
+
 def main():
     if len(sys.argv) < 3:
         print(
@@ -819,79 +921,8 @@ def main():
 
     modelType = args[0]
     checkPtFilePath = args[1]
-    model_filename = os.path.basename(checkPtFilePath)
 
-    isSam3ByName = modelType.lower().startswith("sam3")
-    isSam3ByPath = model_filename.lower().startswith("sam3") or isSam3ModelPath(
-        checkPtFilePath
-    )
-
-    if isSam3ByName or isSam3ByPath:
-        strategy = SAM3Strategy()
-    elif model_filename.lower().startswith("sam_"):
-        strategy = SAM1Strategy()
-    elif model_filename.lower().startswith("sam2"):
-        strategy = SAM2Strategy()
-    elif modelType.lower() in {
-        name.lower() for name in SAM1Strategy.MODEL_TYPE_LOOKUP.values()
-    }:
-        print(f"Routing by model type '{modelType}' (filename is ambiguous).")
-        strategy = SAM1Strategy()
-    elif modelType.lower() in {
-        name.lower() for name in SAM2Strategy.MODEL_TYPE_LOOKUP
-    }:
-        print(f"Routing by model type '{modelType}' (filename is ambiguous).")
-        strategy = SAM2Strategy()
-    elif modelType.lower() == "auto":
-        # Last resort: identify the backend from the weights themselves.
-        detectedFamily = detectFamily(checkPtFilePath)
-        if detectedFamily == "sam1":
-            print("Checkpoint holds SAM1 weights; using the SAM1 backend.")
-            strategy = SAM1Strategy()
-        elif detectedFamily == "sam2":
-            print("Checkpoint holds SAM2 weights; using the SAM2 backend.")
-            strategy = SAM2Strategy()
-        else:
-            print(
-                f"Error: Could not determine model family from filename: {model_filename}"
-            )
-            print(
-                "The file name must start with 'sam_' (SAM1), 'sam2' (SAM2) or 'sam3' (SAM3), "
-                "or it must sit in a transformers SAM3 model folder (config.json)."
-            )
-            return
-    else:
-        detectedFamily = None
-        print(
-            f"Error: Could not determine model family from filename: {model_filename}"
-        )
-        print(
-            "The file name must start with 'sam_' (SAM1), 'sam2' (SAM2) or 'sam3' (SAM3), "
-            "or it must sit in a transformers SAM3 model folder (config.json)."
-        )
-        return
-
-    if modelType.lower() == "auto":
-        modelType = strategy.get_model_type_from_filename(model_filename)
-        if not modelType and detectedFamily == "sam1":
-            # Renamed file: the SAM1 size is visible in the encoder depth.
-            modelType = detectVitSize(checkPtFilePath)
-            if modelType:
-                print(f"Auto-detected SAM1 model type from weights: {modelType}")
-        if not modelType:
-            if detectedFamily:
-                print(
-                    f"Error: the checkpoint holds {detectedFamily.upper()} weights "
-                    "but the size is ambiguous; pick the model type explicitly or "
-                    "use a canonical checkpoint filename."
-                )
-            return
-
-    if not os.path.exists(checkPtFilePath) and not isinstance(strategy, SAM3Strategy):
-        print(f"Error: Checkpoint file not found: {checkPtFilePath}")
-        return
-
-    sam = strategy.load_model(checkPtFilePath, modelType)
+    strategy, sam, modelType = loadWithFallback(checkPtFilePath, modelType)
     if sam is None:
         return
 

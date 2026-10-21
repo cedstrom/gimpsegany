@@ -56,7 +56,7 @@ The plugin runs SAM 3 and SAM 3.1 through the [Transformers](https://huggingface
    hf download unsloth/sam3.1 --local-dir /path/to/sam3.1
    ```
    Keep `config.json`, `model.safetensors` and the tokenizer files in the same folder.
-3. In the plugin dialog pick `sam3.1 (SAM3)` as **Model Type** and select `model.safetensors` (or any file of that folder) as **Checkpoint Path**. The model is loaded from that folder; the model type only selects the SAM3 code path.
+3. In the plugin dialog select `model.safetensors` (or any file of that folder) as **Checkpoint Path**. The model backend is detected from the checkpoint automatically.
 
 **AMD / ROCm:** install a ROCm PyTorch build into the same environment, for example:
 
@@ -133,6 +133,8 @@ A scripted end-to-end check of the SAM3 path (test mode, Auto, Box and Selection
 /path/to/python3/python ./seganybridge.py vit_h /path/to/checkpoint/model/sam_vit_h_4b8939.pth
 ```
 
+Any explicit type also works; `auto` in its place detects the backend from the checkpoint.
+
 ---
 
 ## Plugin Usage
@@ -147,8 +149,7 @@ A scripted end-to-end check of the SAM3 path (test mode, Auto, Box and Selection
 ### Options
 
 - **Python3 Path:** The path to the python3 instance used while running the seganybridge script.
-- **Model Type:** The type of the Segment Anything model to use. Can be set to `Auto` to infer it from the checkpoint: `sam_` prefix for SAM1, `sam2` prefix for SAM2, a file inside a folder with a SAM3 `config.json` for SAM3.
-- **Checkpoint Path:** The path to the downloaded Segment Anything model checkpoint file (`.pth` or `.safetensors`).
+- **Checkpoint Path:** The path to the downloaded Segment Anything model checkpoint file (`.pth`, `.safetensors`, or a SAM3 model folder). The backend, version and size are detected from the checkpoint automatically: an explicit type is tried first, then the filename, then the weights themselves, then every backend in turn (SAM3, 2.1 sizes, 2.0 sizes, SAM1 sizes) until one loads.
 - **Segmentation Type:** The method to be used for segmentation.
   - **Auto:** Automatically segments the entire image.
   - **Box:** Segments objects within a user-drawn rectangular selection.

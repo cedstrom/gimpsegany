@@ -150,20 +150,21 @@ PYEOF
 
 "$PY" -c "import torch; print('device:', 'cuda' if torch.cuda.is_available() else 'cpu', torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"
 
-# 1-3. Test mode: each backend loads its checkpoint.
-run_step vit_h_load "Success!!" -- vit_h "$VIT_H"
+# 1-3. Test mode: each backend loads its checkpoint (bare auto throughout).
+run_step vit_h_load "Success!!" -- auto "$VIT_H"
 run_step sam21_pt_load "Success!!" -- auto "$S21_PT"
 # The HF model.safetensors is transformers-native (Sam2VideoModel): the sam2
 # package cannot load it. Point the user at the Meta-layout .pt instead.
 run_step sam21_safetensors_native "transformers-native" -- sam2.1_hiera_large "$S21_SF"
-run_step sam21_safetensors_auto "size is ambiguous" -- auto "$S21_SF"
+# Bare auto hits the same guard (the sweep only applies to loadable files).
+run_step sam21_safetensors_auto "transformers-native" -- auto "$S21_SF"
 # A Meta-layout .safetensors (converted from the .pt here) loads fine and
 # exercises the safetensors -> pth conversion.
 S21_CONV="$WORK/sam21_meta.safetensors"
 if [ ! -f "$S21_CONV" ]; then
     "$PY" -c "from safetensors.torch import save_file; import torch; save_file(torch.load('$S21_PT', map_location='cpu', weights_only=True)['model'], '$S21_CONV')"
 fi
-run_step sam21_safetensors_load "Success!!" -- sam2.1_hiera_large "$S21_CONV"
+run_step sam21_safetensors_load "Success!!" -- auto "$S21_CONV"
 
 # 4. A wrong explicit 2.0 type with 2.1 weights must follow the file.
 run_step sam21_version_correction "using config for 'sam2.1_hiera_large'" -- sam2_hiera_large "$S21_PT"
@@ -172,18 +173,22 @@ run_step sam21_version_correction "using config for 'sam2.1_hiera_large'" -- sam
 ln -sf "$VIT_H" "$WORK/weights.bin"
 run_step sam1_renamed "from weights: vit_h" -- auto "$WORK/weights.bin"
 
-# 6. Renamed SAM2 file: family is detected, size stays ambiguous (clear error).
+# 6. Renamed SAM2 file: version comes from the keys, size via sweep.
 ln -sf "$S21_PT" "$WORK/other.bin"
-run_step sam2_renamed "size is ambiguous" -- auto "$WORK/other.bin"
+run_step sam2_renamed "Loaded with sam2.1_hiera_large" -- auto "$WORK/other.bin"
 
-# 7. SAM 2.1 Auto segmentation produces masks.
+# 7. A garbage file tries everything, then fails with the attempt list.
+: > "$WORK/junk.bin"
+run_step junk_refused "could not load" -- auto "$WORK/junk.bin"
+
+# 8. SAM 2.1 Auto segmentation produces masks.
 rm -f "$WORK/s21auto_"*.seg
 run_step sam21_auto "SAM2" -- auto "$S21_PT" "$IMG" Auto Multiple "$WORK/s21auto_" True Medium 0 0
 check_masks sam21_auto "$WORK/s21auto_"
 
-# 8. SAM1 Auto segmentation produces masks (SAM1 omits the SAM2-only args).
+# 9. SAM1 Auto segmentation produces masks (SAM1 omits the SAM2-only args).
 rm -f "$WORK/vitauto_"*.seg
-run_step vit_h_auto "SAM1" -- vit_h "$VIT_H" "$IMG" Auto Multiple "$WORK/vitauto_" True
+run_step vit_h_auto "SAM1" -- auto "$VIT_H" "$IMG" Auto Multiple "$WORK/vitauto_" True
 check_masks vit_h_auto "$WORK/vitauto_"
 
 log ""
