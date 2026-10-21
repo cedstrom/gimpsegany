@@ -11,7 +11,7 @@
 # (set it to "" to force a CPU run).
 
 IMAGE_ARG="$1"
-PY="${2:-/home/cedstrom/src/.venv-sam3/bin/python}"
+PY="${2:-/home/cedstrom/.venv-sam12/bin/python}"
 MODEL_DIR="${3:-/mnt/fast/models/unsloth-sam3.1}"
 PROMPT="${PROMPT:-bee, flower}"
 
