@@ -205,9 +205,9 @@ else
     pass "empty_prompt wrote no masks"
 fi
 
-# 6. The SAM1 backend guard must stay intact (segment_anything not installed here)
+# 6. The SAM1 backend must be present and attempted (dummy file, real load try).
 : >"$WORK/sam_vit_h_4b8939.pth"
-run_step sam1_backend_missing "not installed" -- vit_h "$WORK/sam_vit_h_4b8939.pth"
+run_step sam1_backend_present "Error loading SAM1 model" -- vit_h "$WORK/sam_vit_h_4b8939.pth"
 
 log ""
 log "======================================"
