@@ -33,7 +33,7 @@ import logging
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
-PLUGIN_VERSION = "1.3.1"  # Bump on every user-visible change.
+PLUGIN_VERSION = "1.0.0"  # Bump on every user-visible change.
 
 
 def isSam3CheckpointPath(checkpointPath):
