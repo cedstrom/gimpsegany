@@ -170,6 +170,13 @@ These options apply when a SAM 3 / SAM 3.1 model is used.
 - **Segmentation Resolution** and **Crop n Layers** are SAM2 only and are hidden for SAM3.
 
 
+#### SAM1 Specific Behavior
+
+- **Auto** downscales images whose longest side exceeds 2048 px to fit GPU
+  memory (a 16 MP photo otherwise exhausts even a 20 GB card) and upscales
+  the masks back to full size. A notice is printed when this kicks in. Box
+  and Selection run at full resolution.
+
 #### SAM2 Specific Options (for "Auto" Segmentation)
 
 These options are only available when using a SAM2 model with "Auto" segmentation.

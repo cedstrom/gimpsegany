@@ -150,6 +150,11 @@ class SAM1Strategy(SegmentationStrategy):
         "sam_vit_b_01ec64": "vit_b",
     }
 
+    # SAM1 holds full-resolution proposal masks on the GPU, which OOMs even
+    # on 20 GB cards for ~16 MP photos. Cap the working size and upscale the
+    # masks back; the encoder itself only sees 1024 px anyway.
+    MAX_SIDE = 2048
+
     def load_model(self, checkPtFilePath, modelType):
         if not SAM1_AVAILABLE:
             print("Error: SAM1 is not installed.")
@@ -166,10 +171,44 @@ class SAM1Strategy(SegmentationStrategy):
             return None
 
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
-        mask_generator = SamAutomaticMaskGenerator_SAM1(sam)
-        masks = mask_generator.generate(cvImage)
-        masks = [mask["segmentation"] for mask in masks]
-        saveMasks(masks, saveFileNoExt, formatBinary)
+        height, width = cvImage.shape[:2]
+        scale = min(1.0, self.MAX_SIDE / max(height, width))
+        workImage = cvImage
+        if scale < 1.0:
+            workImage = cv2.resize(
+                cvImage,
+                (int(width * scale), int(height * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+            print(
+                f"SAM1: downscaled {width}x{height} to "
+                f"{workImage.shape[1]}x{workImage.shape[0]} to fit GPU memory; "
+                "masks are upscaled back to full size."
+            )
+        try:
+            mask_generator = SamAutomaticMaskGenerator_SAM1(sam)
+            masks = mask_generator.generate(workImage)
+        except torch.cuda.OutOfMemoryError:
+            print(
+                "Error: SAM1 ran out of GPU memory on this image. "
+                "Try a smaller image."
+            )
+            return
+        segs = [mask["segmentation"] for mask in masks]
+        if scale < 1.0:
+            segs = [
+                cv2.resize(
+                    mask.astype(np.uint8),
+                    (width, height),
+                    interpolation=cv2.INTER_NEAREST,
+                ).astype(bool)
+                for mask in segs
+            ]
+        if not segs:
+            print("SAM1 found no masks.")
+            return
+        saveMasks(segs, saveFileNoExt, formatBinary)
+        print(f"SAM1 wrote {len(segs)} mask(s)")
 
     def segment_box(
         self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, **kwargs

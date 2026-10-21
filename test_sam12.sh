@@ -107,7 +107,8 @@ PYEOF
 check_masks() {
     local name="$1"
     local prefix="$2"
-    if summarize "$prefix" "$IMG"; then
+    local image="$3"
+    if summarize "$prefix" "$image"; then
         pass "$name produced masks"
     else
         fail "$name produced no masks"
@@ -147,6 +148,7 @@ small = cv2.resize(image, (512, int(image.shape[0] * scale)))
 cv2.imwrite(sys.argv[2], small)
 print(f"test image {sys.argv[2]}: {small.shape}")
 PYEOF
+IMGFULL="$src"
 
 "$PY" -c "import torch; print('device:', 'cuda' if torch.cuda.is_available() else 'cpu', torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"
 
@@ -184,12 +186,22 @@ run_step junk_refused "could not load" -- auto "$WORK/junk.bin"
 # 8. SAM 2.1 Auto segmentation produces masks.
 rm -f "$WORK/s21auto_"*.seg
 run_step sam21_auto "SAM2" -- auto "$S21_PT" "$IMG" Auto Multiple "$WORK/s21auto_" True Medium 0 0
-check_masks sam21_auto "$WORK/s21auto_"
+check_masks sam21_auto "$WORK/s21auto_" "$IMG"
 
 # 9. SAM1 Auto segmentation produces masks (SAM1 omits the SAM2-only args).
 rm -f "$WORK/vitauto_"*.seg
-run_step vit_h_auto "SAM1" -- auto "$VIT_H" "$IMG" Auto Multiple "$WORK/vitauto_" True
-check_masks vit_h_auto "$WORK/vitauto_"
+run_step vit_h_auto "SAM1 wrote" -- auto "$VIT_H" "$IMG" Auto Multiple "$WORK/vitauto_" True
+check_masks vit_h_auto "$WORK/vitauto_" "$IMG"
+
+# 10. SAM1 Auto on the full-size photo (downscale + upscale path).
+rm -f "$WORK/vitfull_"*.seg
+run_step vit_h_auto_full "SAM1 wrote" -- auto "$VIT_H" "$IMGFULL" Auto Multiple "$WORK/vitfull_" True
+if grep -q "downscaled" "$WORK/vit_h_auto_full.log"; then
+    pass "vit_h_auto_full used the downscale path"
+else
+    fail "vit_h_auto_full did not print the downscale notice"
+fi
+check_masks vit_h_auto_full "$WORK/vitfull_" "$IMGFULL"
 
 log ""
 log "======================================"
