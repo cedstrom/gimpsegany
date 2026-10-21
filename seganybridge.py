@@ -250,10 +250,10 @@ class SAM2Strategy(SegmentationStrategy):
         "sam2_hiera_base_plus": "sam2_hiera_base_plus",
         "sam2_hiera_small": "sam2_hiera_small",
         "sam2_hiera_tiny": "sam2_hiera_tiny",
-        "sam2.1_hiera_large": "sam2_hiera_large",
-        "sam2.1_hiera_base_plus": "sam2_hiera_base_plus",
-        "sam2.1_hiera_small": "sam2_hiera_small",
-        "sam2.1_hiera_tiny": "sam2_hiera_tiny",
+        "sam2.1_hiera_large": "sam2.1_hiera_large",
+        "sam2.1_hiera_base_plus": "sam2.1_hiera_base_plus",
+        "sam2.1_hiera_small": "sam2.1_hiera_small",
+        "sam2.1_hiera_tiny": "sam2.1_hiera_tiny",
     }
 
     def __init__(self):
@@ -298,6 +298,10 @@ class SAM2Strategy(SegmentationStrategy):
             "sam2_hiera_small": "sam2_hiera_s.yaml",
             "sam2_hiera_base_plus": "sam2_hiera_b+.yaml",
             "sam2_hiera_large": "sam2_hiera_l.yaml",
+            "sam2.1_hiera_tiny": "configs/sam2.1/sam2.1_hiera_t.yaml",
+            "sam2.1_hiera_small": "configs/sam2.1/sam2.1_hiera_s.yaml",
+            "sam2.1_hiera_base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+            "sam2.1_hiera_large": "configs/sam2.1/sam2.1_hiera_l.yaml",
         }
         config_file = model_configs.get(modelType, "sam2_hiera_l.yaml")
         actual_checkpoint_path = checkPtFilePath
