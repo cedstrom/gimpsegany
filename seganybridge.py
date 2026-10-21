@@ -21,7 +21,6 @@ You should have received a copy of the GNU General Public License along
 with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 """
-
 import torch
 import numpy as np
 import cv2
@@ -29,16 +28,26 @@ import sys
 import os
 
 # SAM2 imports
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+try:
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+    from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+
+    SAM2_AVAILABLE = True
+except ImportError:
+    SAM2_AVAILABLE = False
 
 # SAM1 imports
-from segment_anything import (
-    sam_model_registry,
-    SamAutomaticMaskGenerator as SamAutomaticMaskGenerator_SAM1,
-    SamPredictor,
-)
+try:
+    from segment_anything import (
+        sam_model_registry,
+        SamAutomaticMaskGenerator as SamAutomaticMaskGenerator_SAM1,
+        SamPredictor,
+    )
+
+    SAM1_AVAILABLE = True
+except ImportError:
+    SAM1_AVAILABLE = False
 
 # --- Utility Functions ---
 
@@ -100,11 +109,21 @@ class SegmentationStrategy:
     def segment_auto(self, sam, cvImage, saveFileNoExt, formatBinary, **kwargs):
         raise NotImplementedError
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(
+        self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, **kwargs
+    ):
         raise NotImplementedError
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self,
+        sam,
+        cvImage,
+        maskType,
+        selFile,
+        boxCos,
+        saveFileNoExt,
+        formatBinary,
+        **kwargs,
     ):
         raise NotImplementedError
 
@@ -138,6 +157,12 @@ class SAM1Strategy(SegmentationStrategy):
             return None
 
     def load_model(self, checkPtFilePath, modelType):
+        if not SAM1_AVAILABLE:
+            print("Error: SAM1 is not installed.")
+            print(
+                "Install it from https://github.com/facebookresearch/segment-anything (pip install -e .)"
+            )
+            return None
         try:
             sam = sam_model_registry[modelType](checkpoint=checkPtFilePath)
             print("SAM1 Model loaded successfully!")
@@ -152,7 +177,9 @@ class SAM1Strategy(SegmentationStrategy):
         masks = [mask["segmentation"] for mask in masks]
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(
+        self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, **kwargs
+    ):
         predictor = SamPredictor(sam)
         predictor.set_image(cvImage)
         input_box = np.array(boxCos)
@@ -165,7 +192,15 @@ class SAM1Strategy(SegmentationStrategy):
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self,
+        sam,
+        cvImage,
+        maskType,
+        selFile,
+        boxCos,
+        saveFileNoExt,
+        formatBinary,
+        **kwargs,
     ):
         pts = []
         with open(selFile, "r") as f:
@@ -240,6 +275,12 @@ class SAM2Strategy(SegmentationStrategy):
             return False
 
     def load_model(self, checkPtFilePath, modelType):
+        if not SAM2_AVAILABLE:
+            print("Error: SAM2 is not installed.")
+            print(
+                "Install it from https://github.com/facebookresearch/sam2 (pip install -e .)"
+            )
+            return None
         model_configs = {
             "sam2_hiera_tiny": "sam2_hiera_t.yaml",
             "sam2_hiera_small": "sam2_hiera_s.yaml",
@@ -282,7 +323,9 @@ class SAM2Strategy(SegmentationStrategy):
         masks = [mask["segmentation"] for mask in masks]
         saveMasks(masks, saveFileNoExt, formatBinary)
 
-    def segment_box(self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary):
+    def segment_box(
+        self, sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary, **kwargs
+    ):
         predictor = SAM2ImagePredictor(sam)
         predictor.set_image(cvImage)
         input_box = np.array(boxCos)
@@ -295,7 +338,15 @@ class SAM2Strategy(SegmentationStrategy):
         saveMasks(masks, saveFileNoExt, formatBinary)
 
     def segment_sel(
-        self, sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+        self,
+        sam,
+        cvImage,
+        maskType,
+        selFile,
+        boxCos,
+        saveFileNoExt,
+        formatBinary,
+        **kwargs,
     ):
         pts = []
         with open(selFile, "r") as f:
@@ -339,8 +390,19 @@ def main():
         )
         return
 
-    modelType = sys.argv[1]
-    checkPtFilePath = sys.argv[2]
+    # Named options are appended by the plug-in after the positional arguments.
+    options = {}
+    args = []
+    for arg in sys.argv[1:]:
+        if arg.startswith("--prompt="):
+            options["prompt"] = arg[len("--prompt=") :]
+        elif arg.startswith("--"):
+            print(f"Ignoring unknown option: {arg}")
+        else:
+            args.append(arg)
+
+    modelType = args[0]
+    checkPtFilePath = args[1]
     model_filename = os.path.basename(checkPtFilePath)
 
     if model_filename.lower().startswith("sam_"):
@@ -368,51 +430,68 @@ def main():
         return
 
     if torch.cuda.is_available():
-        sam.to(device="cuda")
-        print("Model moved to CUDA")
+        try:
+            sam.to(device="cuda")
+            print("Model moved to CUDA")
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            print(f"Cannot move the model to the GPU ({e}). Continuing on the CPU.")
 
-    if len(sys.argv) == 3:
+    if len(args) == 2:
         strategy.run_test(sam)
         print("Success!!")
         strategy.cleanup()
         return
 
-    ipFile = sys.argv[3]
-    segType = sys.argv[4]
-    maskType = sys.argv[5]
-    saveFileNoExt = sys.argv[6]
-    formatBinary = sys.argv[7] == "True" if len(sys.argv) > 7 else True
+    ipFile = args[2]
+    segType = args[3]
+    maskType = args[4]
+    saveFileNoExt = args[5]
+    formatBinary = args[6] == "True" if len(args) > 6 else True
+    textPrompt = options.get("prompt", "")
 
     cvImage = cv2.imread(ipFile)
     cvImage = cv2.cvtColor(cvImage, cv2.COLOR_BGR2RGB)
 
     try:
         if segType == "Auto":
-            auto_kwargs = {}
+            auto_kwargs = {"maskType": maskType, "textPrompt": textPrompt}
             if isinstance(strategy, SAM2Strategy):
-                if len(sys.argv) > 8:
-                    auto_kwargs["segRes"] = sys.argv[8]
-                if len(sys.argv) > 9:
-                    auto_kwargs["cropNLayers"] = int(sys.argv[9])
-                if len(sys.argv) > 10:
-                    auto_kwargs["minMaskArea"] = int(sys.argv[10])
+                if len(args) > 7:
+                    auto_kwargs["segRes"] = args[7]
+                if len(args) > 8:
+                    auto_kwargs["cropNLayers"] = int(args[8])
+                if len(args) > 9:
+                    auto_kwargs["minMaskArea"] = int(args[9])
             strategy.segment_auto(
                 sam, cvImage, saveFileNoExt, formatBinary, **auto_kwargs
             )
         elif segType in {"Selection", "Box-Selection"}:
-            selFile = sys.argv[8]
+            selFile = args[7]
             boxCos = (
-                [float(val.strip()) for val in sys.argv[9].split(",")]
-                if len(sys.argv) > 9
+                [float(val.strip()) for val in args[8].split(",")]
+                if len(args) > 8
                 else None
             )
             strategy.segment_sel(
-                sam, cvImage, maskType, selFile, boxCos, saveFileNoExt, formatBinary
+                sam,
+                cvImage,
+                maskType,
+                selFile,
+                boxCos,
+                saveFileNoExt,
+                formatBinary,
+                textPrompt=textPrompt,
             )
         elif segType == "Box":
-            boxCos = [float(val.strip()) for val in sys.argv[9].split(",")]
+            boxCos = [float(val.strip()) for val in args[8].split(",")]
             strategy.segment_box(
-                sam, cvImage, maskType, boxCos, saveFileNoExt, formatBinary
+                sam,
+                cvImage,
+                maskType,
+                boxCos,
+                saveFileNoExt,
+                formatBinary,
+                textPrompt=textPrompt,
             )
         else:
             print(f"Unknown segmentation type: {segType}")
@@ -423,4 +502,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
